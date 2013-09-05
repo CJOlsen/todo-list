@@ -1,4 +1,4 @@
-my todo list
+## todo list
 
 ## description
 
@@ -7,14 +7,20 @@ clojure/leiningen/seesaw environment.
 
 ## Installation
 
-Download from http://example.com/FIXME.
+Download from https://github.com/cjolsen/todo-list
 
 ## Usage
 
-To run navigate to the folder where todo-0.1.0-standalone.jar is located (in
-the repository it's in /todo/jars) and enter:
+To run navigate to the folder where todo-list-1.0.0.jar is 
+located (in the repository it's in /todo/jars) and enter:
 
-    $ java -jar todo-0.1.0-standalone.jar
+    $ java -jar todo-list-1.0.0.jar
+
+## MD5 Checksum
+
+for todo-list-1.0.0.jar:
+
+    7bc7127883108595426beaee948b492e
 
 ## License
 

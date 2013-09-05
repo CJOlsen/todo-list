@@ -1,3 +1,9 @@
+;; todo list
+;; Author: Christopher Olsen
+;; Copyright 2013
+;; License: GPLv3 (a copy should be included, if not visit 
+;;          http://www.gnu.org/licenses/gpl.txt
+
 (ns todo.core
   (:gen-class)
   (:use [seesaw core mig]))
