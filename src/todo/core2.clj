@@ -2,13 +2,6 @@
   (:gen-class)
   (:use [seesaw core mig]))
 
-;; save
-;; load
-;; store list
-;; remove item from list
-;; add to list
-;; shuffle list
-
 (defn save-list [the-list list-name]
   """ Saves list data to local memory."""
     (spit (str "lists/" list-name) (prn-str (map str the-list))))
@@ -27,29 +20,35 @@
 
 ;; what follows is a gigantic closure....
 
-(defn make-todo [list-name]
+(defn make-todo [list-name catch-finished]
   """ Takes a name and an initial list and builds a todo-list frame, 
       complete with button bindings """
+  ;; catch-finished must be a lambda function that takes one argument (a set)
+  ;; that handles list items when removed from their list.  It's generally the
+  ;; add function of the 'completed' list
   (let [the-name (str "list-" list-name)
         the-list (atom (get-list the-name))
         the-listbox (listbox :model @the-list)
         the-entryfield (text "")
         the-add-button (button :text "add")
-        _ (listen the-add-button :action
-                  (fn [e]
-                    (swap! the-list #(conj % (text the-entryfield)))
-                    (save-list @the-list the-name)
-                    (text! the-entryfield "")
-                    (config! the-listbox :model @the-list)))
+        ;;;; shit.  this needs to handle both a string and a set of strings....
+        ;; add-fn (fn [e] ;; lambda fn to add new item to the list
+        ;;          (swap! the-list #(conj % (text the-entryfield)))
+        ;;          (save-list @the-list the-name)
+        ;;          (text! the-entryfield "")
+        ;;          (config! the-listbox :model @the-list))
+        add-fn (fn [e] false)
+        _ (listen the-add-button :action add-fn) ;; bind add button to add-fn
         the-remove-button (button :text "remove")
         _ (listen the-remove-button :action
                   (fn [e]
-                    (swap! the-list
-                           #(remove
-                             (set (selection the-listbox {:multi? true}))
-                             %))
-                    (save-list @the-list the-name)
-                    (config! the-listbox :model @the-list)))
+                    (let [selected (set
+                                    (selection the-listbox {:multi? true}))]
+                      (println "selected: " selected)
+                      (swap! the-list #(remove selected %))
+                      (catch-finished selected) ;; sends to the done list
+                      (save-list @the-list the-name)
+                      (config! the-listbox :model @the-list))))
         the-shuffle-button (button :text "shuffle")
         _ (listen the-shuffle-button :action
                   (fn [e]
@@ -67,9 +66,14 @@
                      :north the-north-split
                      :center (scrollable the-listbox)
                      :south the-south-split
-                     :vgap 5 :hgap 5 :border 5)]
+                     :vgap 5 :hgap 5 :border 5)
+        active (atom true)]
     {:content the-content
-     :name the-name}))
+     :name the-name
+     :active? (deref active)
+     :activate! #(reset! active true)
+     :deactivate! #(reset! active false)
+     :add-item add-fn}))
 
 
 (defn display-lists [frames]
