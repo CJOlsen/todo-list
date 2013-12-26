@@ -1,5 +1,6 @@
 (ns todo.core2
   (:gen-class)
+  (:require [seesaw.dnd :as dnd])
   (:use [seesaw core mig]))
 
 
@@ -42,29 +43,86 @@
       '())))
 
 
-;; what follows is a(n absurdly) gigantic closure....
+(defn list-with-moved-element
+  ;; this borrows heavily from seesaw/test/examples/reorderable_listbox
+  [current-list element new-index]
+  (let [current-list (vec current-list)
+        current-index (.indexOf current-list element)]
+    (if (= new-index current-index)
+      current-list
+      (if (< new-index current-index)
+        (concat (subvec current-list 0 new-index)
+                [element]
+                (subvec current-list new-index current-index)
+                (subvec current-list (inc current-index)))
+        (concat (subvec current-list 0 current-index)
+                (subvec current-list (inc current-index) new-index)
+                [element]
+                (subvec current-list new-index))))))
+
+
+;; the following function is (modified) from the seesaw examples
+;; (reorderable_listbox.clj)
+(defn reorderable-listbox
+  "A listbox of items that the user can reorder by dragging and
+dropping.  The caller provide as input an atom containing a sequence
+of immutable data values, e.g. strings.  That sequence will give the
+original order that items appear in the list.  The atom contents will
+be changed to a new sequence whenever the user modifies the order.  No
+new items are allowed to be added, nor may existing items be removed."
+  [item-list-atom]
+    (listbox :model @item-list-atom
+             :drag-enabled? true
+             :drop-mode :insert
+             :transfer-handler
+             (dnd/default-transfer-handler
+               :import [dnd/string-flavor
+                        (fn [{:keys [target data drop? drop-location] :as m}]
+                          ;; Ignore anything dropped onto the list
+                          ;; that is not in the original set of list
+                          ;; items.
+                          (if (and drop?
+                                   (:insert? drop-location)
+                                   (:index drop-location)
+                                   ((set @item-list-atom) data))
+                            (let [new-order (list-with-moved-element
+                                              @item-list-atom data
+                                              (:index drop-location))]
+                              (reset! item-list-atom new-order)
+                              (config! target :model new-order))))]
+               :export {:actions (constantly :copy)
+                        :start   (fn [c]
+                                   [dnd/string-flavor (selection c)])})))
+
+
+;; what follows is a gigantic closure....
 
 (defn make-todo [list-name catch-finished]
   """ Takes a name and an initial list and builds a todo-list frame, 
-      complete with button bindings """
+      complete with button bindings.  list-name is the name of the list that
+      will be displayed to the user, catch-finished is a currently unused arg
+      that would take a lambda function pointing to a 'finished' list.
+      Each todo-list is encapsulated in this closure except for the button 
+      bindings and 5 public methods: content, name, active?, activate!, and
+      deactivate! """
   ;; catch-finished must be a lambda function that takes one argument (a set)
   ;; that handles list items when removed from their list.  It's generally the
   ;; add function of the 'completed' list
   (let [the-name (str "list-" list-name)
         the-list (atom (get-list the-name))
-        the-listbox (listbox :model @the-list)
+        the-listbox (reorderable-listbox the-list)
         the-entryfield (text "")
         the-add-button (button :text "add")
-        add-fn (fn [e] ;; lambda fn to add new item from the text field
+        add-fn (fn [e] ;; lambda fn to add new item from the text field (UI)
                  (let [entry-text (text the-entryfield)]
-                   (if (> 0 (count entry-text))
-                     (doall (swap! the-list #(conj % entry-text))
-                            (save-list @the-list the-name)
-                            (text! the-entryfield "")
-                            (config! the-listbox :model @the-list)))))
+                   (if (> (count entry-text) 0)
+                     (do (swap! the-list #(conj % entry-text))
+                         (save-list @the-list the-name)
+                         (text! the-entryfield "")
+                         (config! the-listbox :model @the-list)))))
         _ (listen the-add-button :action add-fn) ;; bind add button to add-fn
         the-remove-button (button :text "remove")
-        remove-fn (fn [e]
+        remove-fn (fn [e] ;; fn bound to the remove button (UI) 
                     (let [selected (set
                                     (selection the-listbox {:multi? true}))]
                       (println "selected: " selected)
@@ -79,6 +137,7 @@
                     (swap! the-list shuffle)
                     (config! the-listbox :model @the-list)
                     (save-list @the-list the-name)))
+        ;; functionality's done, now we lay out the interface
         the-north-split (top-bottom-split
                          (label list-name)
                          (left-right-split the-entryfield
@@ -92,6 +151,7 @@
                      :center (scrollable the-listbox)
                      :south the-south-split
                      :vgap 5 :hgap 5 :border 5)
+        ;; the active atom allows lists to be hidden without being deleted
         active (atom true)]
     {:content the-content
      :name the-name
@@ -151,11 +211,12 @@
                  (make-todo "second one" "none")
                  (make-todo "second one" "none")])
 
-(def mod-button
+(def modify-button
+  ;; There is one modify button that allows the todo lists to be rearranged
   (button :text "modify"))
 
-(listen mod-button
-        ;;Create and display a dialog to rearrange the main frame
+(listen modify-button
+        ;; pop-up a new window
         :action (fn [e]
                   (let [active-listbox (listbox :model
                                                 ["one" "two" "three"])
@@ -163,7 +224,7 @@
                         hidden-listbox (listbox :model
                                                 ["a" "b" "c"])
                         make-active (button :text "make selected active")
-                        delete-list (button :text "delete selected list")
+                        delete-list (button :text "delete selected hidden list")
                         _ (listen make-hidden :action
                                   (fn [e] ;; get selected
                                     ;; remove from active
@@ -173,19 +234,24 @@
                         _ (listen make-active :action (fn [e] true))
                         delete-dialog (dialog :content
                                               (flow-panel :items
-                                                          ["Delete the todo list named: " "?"])
+                                                          ["Delete the selected todo-list from the second list box? This can't be undone!"])
                                               :option-type :ok-cancel
                                               :success-fn (fn [e] (+ 5 5)))
-                        _ (listen delete-list :action (fn [e] true))]
+                        _ (listen delete-list :action (fn [e]
+                                                        (-> delete-dialog
+                                                            pack!
+                                                            show!)))]
                     (-> (frame :title "manage todo lists"
                                :content
                                (top-bottom-split
                                 (border-panel :north "Active Todo Lists"
                                               :center active-listbox
-                                              :south make-hidden)
+                                              :south make-hidden
+                                              :transfer-handler [:import [dnd/string-flavor]])
                                 (border-panel :north "Hidden Todo Lists"
                                               :center hidden-listbox
-                                              :south make-active)
+                                              :south (left-right-split
+                                                      make-active delete-list))
                                 :divider-location 1/2))
                         pack!
                         show!))))
@@ -195,7 +261,7 @@
 (def test-content
   (border-panel
    :center (display-lists todo-lists)
-   :south mod-button))
+   :south modify-button))
 
 ;; r (remove)
 ;; s (shuffle)
