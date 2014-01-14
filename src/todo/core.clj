@@ -1,4 +1,4 @@
-(ns todo.core2
+(ns todo.core
   (:gen-class)
   (:require [seesaw.dnd :as dnd]
             [clojure.java.io :as io])
@@ -92,10 +92,10 @@
   (let [no-nil-lists (doall (filter list-not-nil? (get-active-list-names)))]
     (map #(make-todo % "none") no-nil-lists)))
       
-(defn save-list! [the-list list-name]
+(defn save-list! [the-list list-name status]
   " Saves list data to local memory. "
-    (spit (str storage-folder list-name)
-          (prn-str (map str (conj the-list "active")))))
+  (spit (str storage-folder list-name)
+        (prn-str (map str (conj the-list status)))))
 
 (defn delete-list! [list-name]
   ;; DANGEROUS!!!  This could use some checking
@@ -107,7 +107,7 @@
 (defn drop-from-atom! [a i]
   "Drop an item from within an atom, if it's there.  Will drop all atom
    members that match the given item."
-  (swap! @a (fn [x] (filter #(not (= i %)) x))))
+  (swap! a (fn [x] (filter #(not (= i %)) x))))
 
 ;; (defn startup-lists []
 ;;   [(make-todo "first one" "none")
@@ -129,18 +129,37 @@
      :hidden-list-names (atom hidden-list-names)
      :delete-list! (fn [item]
                      " Kind of hard-core - attempts to delete the item from 
-                   both hidden and active lists without checking to see
-                   if it was A) there in the first place or B) if it 
-                   succeeded at all.  Also attempts to delete the list from
-                   memory with complete disregard for safety. "
+                       both hidden and active lists without checking to see
+                       if it was A) there in the first place or B) if it 
+                       succeeded at all.  Also attempts to delete the list from
+                       memory with complete disregard for safety. "
                      (doall (drop-from-atom! (:active-lists organizer) item)
                             (drop-from-atom! (:hidden-lists organizer) item)
                             (delete-list! item)))
      :new-list! (fn [list-name]
-                  (println "new list!!! with name: " list-name)
-                  (save-list! '("active") list-name)
+                  (save-list! '("active") list-name "active")
                   (swap! (:active-list-names organizer) #(conj % list-name))
-                  (config! the-frame :content (active-content)))
+                  (config! the-frame :content (active-content))
+                  (pack! the-frame))
+     :make-hidden! (fn [list-name]
+                     (let [list-currently (get-list list-name)]
+                       (save-list! list-currently list-name "hidden")
+                       (let [with-dropped (drop-from-atom! (:active-list-names organizer) list-name)]
+                         ;; this let form solves a bug where the nested swap!'s were throwing an error
+                         (reset! (:active-list-names organizer) with-dropped))
+                       (swap! (:hidden-list-names organizer) #(conj % list-name))
+                       (config! the-frame :content (active-content))
+                       (pack! the-frame)))
+     :make-active! (fn [list-name]
+                     (let [list-currently (get-list list-name)]
+                       (save-list! list-currently list-name "active")
+                       (let [with-dropped (drop-from-atom! (:hidden-list-names organizer) list-name)]
+                         ;; this let form solves a bug where the nested swap!'s were throwing an error
+                         ;; (there's a swap! in drop-from-atom!)
+                         (reset! (:active-list-names organizer) with-dropped))
+                       (swap! (:active-list-names organizer) #(conj % list-name))
+                       (config! the-frame :content (active-content))
+                       (pack! the-frame)))
      
      ;; :call-rebuild (fn [] "what")
      ;; :completed-list (atom nil) ;; on hold
@@ -234,7 +253,7 @@
                  (let [entry-text (text the-entryfield)]
                    (if (> (count entry-text) 0)                ;; if new text
                      (do (swap! the-list #(conj % entry-text)) ;; update atom
-                         (save-list! @the-list the-name)       ;; save atom
+                         (save-list! @the-list the-name "active") ;; save atom
                          (text! the-entryfield "")             ;; clear textbox
                          (config! the-listbox :model @the-list))))) ;;update lbx
         _ (listen the-add-button :action add-fn) ;; bind add button to add-fn
@@ -245,7 +264,7 @@
                       ;(println "selected: " selected)
                       (swap! the-list #(remove selected %))
                       (catch-finished selected) ;; sends to the done list
-                      (save-list! @the-list the-name)
+                      (save-list! @the-list the-name "active")
                       (config! the-listbox :model @the-list)))
         _ (listen the-remove-button :action remove-fn) 
         the-shuffle-button (button :text "shuffle")
@@ -253,7 +272,7 @@
                   (fn [e]
                     (swap! the-list shuffle)
                     (config! the-listbox :model @the-list)
-                    (save-list! @the-list the-name)))
+                    (save-list! @the-list the-name "active")))
         ;; functionality's done, now we lay out the interface
         the-north-split (top-bottom-split
                          (label list-name)
@@ -276,24 +295,33 @@
      :activate! #(reset! active true)
      :deactivate! #(reset! active false)}))
 
+(defn three-split-horiz [one two three]
+  " helper function for display-lists, displays 3 lists side by side, 33% each "
+  (left-right-split
+   (left-right-split one two :divider-location 1/2)
+   three :divider-location 2/3))
+
+(defn three-split-vert [one two three]
+  " helper function for display-lists, displays 3 lists vertically, 33% each "
+  (top-bottom-split
+   (top-bottom-split one two :divider-location 1/2)
+   three :divider-location 2/3))
+
 (defn display-lists [frames]
   " This is what determines how the todo lists will be tiled. This could maybe
     be more dynamic? "
-  ;(println "hih?")
-  ;(println "\nin display-lists, frames:\n" frames "\n")
   (let [the-count (count frames)
         the-content (map :content frames)]
-    ;(println "\nthe-content:" the-content)
     (cond (= the-count 1) (nth the-content 0)
           (= the-count 2) (left-right-split (nth the-content 0)
                                             (nth the-content 1)
                                             :divider-location 1/2)
-          (= the-count 3) (top-bottom-split
+          (= the-count 3) (top-bottom-split  ;; two top, one bottom
                            (left-right-split (nth the-content 0)
                                              (nth the-content 1)
                                              :divider-location 1/2)
                            (nth the-content 2) :divider-location 1/2)
-          (= the-count 4) (top-bottom-split
+          (= the-count 4) (top-bottom-split  ;; two and two
                            (left-right-split (nth the-content 0)
                                              (nth the-content 1)
                                              :divider-location 1/2)
@@ -301,14 +329,51 @@
                                              (nth the-content 3)
                                              :divider-location 1/2)
                            :divider-location 1/2)
-          (= the-count 5) () ;; two top three bottom
-          (= the-count 6) () ;; 3+3
-          (= the-count 7) () ;; 2+2+3
-          (= the-count 8) () ;; 2+3+3
-          (= the-count 9) () ;; 3x3
-          )))
-
-
+          (= the-count 5) (top-bottom-split  ;; two top three bottom
+                           (left-right-split (nth the-content 0)
+                                             (nth the-content 1)
+                                             :divider-location 1/2)
+                           (three-split-horiz (nth the-content 2)
+                                              (nth the-content 3)
+                                              (nth the-content 4)))
+          (= the-count 6) (top-bottom-split  ;; three top three bottom
+                           (three-split-horiz (nth the-content 0)
+                                              (nth the-content 1)
+                                              (nth the-content 2))
+                           (three-split-horiz (nth the-content 3)
+                                              (nth the-content 4)
+                                              (nth the-content 5))
+                           :divider-location 1/2)
+          (= the-count 7) (three-split-vert  ;; two-two-three
+                           (left-right-split (nth the-content 0)
+                                             (nth the-content 1)
+                                             :divider-location 1/2)
+                           (left-right-split (nth the-content 2)
+                                             (nth the-content 3)
+                                             :divider-location 1/2)
+                           (three-split-horiz (nth the-content 4)
+                                              (nth the-content 5)
+                                              (nth the-content 6)))
+          (= the-count 8) (three-split-vert  ;; two-three-three
+                           (left-right-split (nth the-content 0)
+                                             (nth the-content 1)
+                                             :divider-location 1/2)
+                           (three-split-horiz (nth the-content 2)
+                                              (nth the-content 3)
+                                              (nth the-content 4))
+                           (three-split-horiz (nth the-content 5)
+                                              (nth the-content 6)
+                                              (nth the-content 7)))
+          (= the-count 9) (three-split-vert  ;; three-three-three
+                           (three-split-horiz (nth the-content 0)
+                                              (nth the-content 1)
+                                              (nth the-content 2))
+                           (three-split-horiz (nth the-content 3)
+                                              (nth the-content 4)
+                                              (nth the-content 5))
+                           (three-split-horiz (nth the-content 6)
+                                              (nth the-content 7)
+                                              (nth the-content 8))))))
 
 (def modify-button
   ;; There is one modify button that allows the todo lists to be rearranged
@@ -322,11 +387,8 @@
         
         ;; needs a "done" button
         ;; needs an "add new active list" button
-        
         :action (fn [e]
-                  (let [;; active-listbox (listbox :model
-                        ;;                        ["one" "two" "three"])
-                        active-model (:active-list-names organizer)
+                  (let [active-model (:active-list-names organizer)
                         active-listbox (reorderable-listbox active-model)
                         hidden-model (:hidden-list-names organizer)
                         hidden-listbox (reorderable-listbox hidden-model)
@@ -345,7 +407,8 @@
                                       (swap! hidden-model #(conj % mover))
                                       (swap! active-model #(drop-item % mover))
                                       (config! hidden-listbox :model @hidden-model)
-                                      (config! active-listbox :model @active-model))))
+                                      (config! active-listbox :model @active-model)
+                                      ((:make-hidden! organizer) mover))))
                         _ (listen make-active :action
                                   ;; "See notes for make-hidden above.
                                   ;;  They are almost identical."
@@ -353,7 +416,8 @@
                                       (swap! active-model #(conj % mover))
                                       (swap! hidden-model #(drop-item % mover))
                                       (config! hidden-listbox :model @hidden-model)
-                                      (config! active-listbox :model @active-model))))
+                                      (config! active-listbox :model @active-model)
+                                      ((:make-active! organizer) mover))))
                         delete-dialog (dialog :content
                                               (flow-panel :items
                                                           ["Delete the selected todo-list from the second list box? This will delete the list and all of its items and this can't be undone!"])
