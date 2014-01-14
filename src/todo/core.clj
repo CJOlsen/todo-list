@@ -5,6 +5,13 @@
   (:use [seesaw core mig]))
 
 
+;;;
+;;; ** :active-lists and :hidden-lists not updating properly (organizer)
+;;; ** listbox order not updating with the edit page
+;;; 
+
+
+
 (defn print-it [note arg]
   "debugging tool"
   (println "print-it. " note " " arg)
@@ -102,18 +109,13 @@
   (io/delete-file (str (:storage organizer) list-name)))
 
 
+
 ;; controller/logic -----------------------------------------------------------
 
 (defn drop-from-atom! [a i]
   "Drop an item from within an atom, if it's there.  Will drop all atom
    members that match the given item."
   (swap! a (fn [x] (filter #(not (= i %)) x))))
-
-;; (defn startup-lists []
-;;   [(make-todo "first one" "none")
-;;    (make-todo "first one" "none")
-;;    (make-todo "second one" "none")
-;;    (make-todo "second one" "none")])
 
 (declare the-frame active-content)
 
@@ -122,6 +124,7 @@
   ;;   global context. "
   ;; The let form fixes a problem where the active and hidden atoms were
   ;; being initialized with nil for contents.
+  
   (let [active-list-names (get-active-list-names)
         hidden-list-names (get-hidden-list-names)]
     {:storage "lists/"
@@ -259,11 +262,11 @@
         _ (listen the-add-button :action add-fn) ;; bind add button to add-fn
         the-remove-button (button :text "remove")
         remove-fn (fn [e] ;; fn bound to the remove button (UI) 
+                    (println "remove-fn")
                     (let [selected (set
                                     (selection the-listbox {:multi? true}))]
-                      ;(println "selected: " selected)
                       (swap! the-list #(remove selected %))
-                      (catch-finished selected) ;; sends to the done list
+                      ;; (catch-finished selected) ;; sends to the done list
                       (save-list! @the-list the-name "active")
                       (config! the-listbox :model @the-list)))
         _ (listen the-remove-button :action remove-fn) 
@@ -375,100 +378,101 @@
                                               (nth the-content 7)
                                               (nth the-content 8))))))
 
-(def modify-button
-  ;; There is one modify button that allows the todo lists to be rearranged
-  (button :text "modify"))
-
-(listen modify-button
-        ;; pop-up a new window for meta list options.  Everything for the
-        ;; 'modify' pop-up is encapsulated in this closure.  This is a bit 
-        ;; complicated and maybe should be broken out into pieces, as it is
-        ;; it wouldn't really fit into the usual 80 columns
-        
-        ;; needs a "done" button
-        ;; needs an "add new active list" button
-        :action (fn [e]
-                  (let [active-model (:active-list-names organizer)
-                        active-listbox (reorderable-listbox active-model)
-                        hidden-model (:hidden-list-names organizer)
-                        hidden-listbox (reorderable-listbox hidden-model)
-                        make-hidden (button :text "make selected hidden")
-                        make-active (button :text "make selected active")
-                        delete-list (button :text "delete selected hidden list")
-                        add-new-list (button :text "add new active list")
-                        ;; done-button (button :text "done") ;; future 
-                        _ (listen make-hidden :action
-                                  ;; "make-hidden moves a string from the active
-                                  ;;  list to the hidden list.  It does not happen
-                                  ;;  in a transaction and it's a multistep process
-                                  ;;  so there's a possibility of state problems."
-                                  (fn [e]
-                                    (let [mover (selection active-listbox)]
-                                      (swap! hidden-model #(conj % mover))
-                                      (swap! active-model #(drop-item % mover))
-                                      (config! hidden-listbox :model @hidden-model)
-                                      (config! active-listbox :model @active-model)
-                                      ((:make-hidden! organizer) mover))))
-                        _ (listen make-active :action
-                                  ;; "See notes for make-hidden above.
-                                  ;;  They are almost identical."
-                                  (fn [e] (let [mover (selection hidden-listbox)]
-                                      (swap! active-model #(conj % mover))
-                                      (swap! hidden-model #(drop-item % mover))
-                                      (config! hidden-listbox :model @hidden-model)
-                                      (config! active-listbox :model @active-model)
-                                      ((:make-active! organizer) mover))))
-                        delete-dialog (dialog :content
-                                              (flow-panel :items
-                                                          ["Delete the selected todo-list from the second list box? This will delete the list and all of its items and this can't be undone!"])
-                                              :option-type :ok-cancel
-                                              :success-fn (fn [e]
-                                                            (let [deletion (selection hidden-listbox)]
-                                                              (swap! hidden-model #(drop-item % deletion))
-                                                              (config! hidden-listbox :model @hidden-model)
-                                                              )))
-                        _ (listen delete-list :action (fn [e]
-                                                        (-> delete-dialog
-                                                            pack!
-                                                            show!)))
-                        entry-field (text "add new name here")
-                        add-new-dialog (dialog :content
-                                                 (flow-panel :items
-                                                             ["add new todo-list with name: " entry-field])
-                                                 :option-type :ok-cancel
-                                                 :success-fn (fn [e]
-                                                               (let [new-name (text entry-field)]
-                                                                 (swap! active-model #(conj % new-name))
-                                                                 (config! active-listbox :model @active-model)
-                                                                 ((:new-list! organizer) new-name)
-                                                                 ;; add to display
-                                                                 true)))
-                        _ (listen add-new-list :action (fn [e]
-                                                         (-> add-new-dialog
-                                                             pack!
-                                                             show!)))]
-                    (-> (frame :title "manage todo lists"
-                               :content
-                               (top-bottom-split
-                                (border-panel :north "Active Todo Lists"
-                                              :center active-listbox
-                                              :south (left-right-split make-hidden add-new-list))
-                                (border-panel :north "Hidden Todo Lists"
-                                              :center hidden-listbox
-                                              :south (left-right-split make-active delete-list))
-                                :divider-location 1/2))
-                        pack!
-                        show!))))
+(def mod-listen
+  ;; pop-up a new window for meta list options.  Everything for the
+  ;; 'modify' pop-up is encapsulated in this closure.  This is a bit 
+  ;; complicated and maybe should be broken out into pieces, as it is
+  ;; it wouldn't really fit into the usual 80 columns
+  
+  ;; needs a "done" button
+  ;; needs an "add new active list" button
+  (fn [e]
+    (let [active-model (:active-list-names organizer)
+          active-listbox (reorderable-listbox active-model)
+          hidden-model (:hidden-list-names organizer)
+          hidden-listbox (reorderable-listbox hidden-model)
+          make-hidden (button :text "make selected hidden")
+          make-active (button :text "make selected active")
+          delete-list (button :text "delete selected hidden list")
+          add-new-list (button :text "add new active list")
+          ;; done-button (button :text "done") ;; future 
+          _ (listen make-hidden :action
+                    ;; "make-hidden moves a string from the active
+                    ;;  list to the hidden list.  It does not happen
+                    ;;  in a transaction and it's a multistep process
+                    ;;  so there's a possibility of state problems."
+                    (fn [e]
+                      (let [mover (selection active-listbox)]
+                        (swap! hidden-model #(conj % mover))
+                        (swap! active-model #(drop-item % mover))
+                        (config! hidden-listbox :model @hidden-model)
+                        (config! active-listbox :model @active-model)
+                        ((:make-hidden! organizer) mover))))
+          _ (listen make-active :action
+                    ;; "See notes for make-hidden above.
+                    ;;  They are almost identical."
+                    (fn [e] (let [mover (selection hidden-listbox)]
+                              (swap! active-model #(conj % mover))
+                              (swap! hidden-model #(drop-item % mover))
+                              (config! hidden-listbox :model @hidden-model)
+                              (config! active-listbox :model @active-model)
+                              ((:make-active! organizer) mover))))
+          delete-dialog (dialog :content
+                                (flow-panel :items
+                                            ["Delete the selected not-active todo-list? This will delete the list and all of its items and this can't be undone!"])
+                                :option-type :ok-cancel
+                                :success-fn (fn [e]
+                                              (let [deletion (selection hidden-listbox)]
+                                                (swap! hidden-model #(drop-item % deletion))
+                                                (config! hidden-listbox :model @hidden-model)
+                                                )))
+          _ (listen delete-list :action (fn [e]
+                                          (-> delete-dialog
+                                              pack!
+                                              show!)))
+          entry-field (text "add new name here")
+          add-new-dialog (dialog :content
+                                 (flow-panel :items
+                                             ["add new todo-list with name: " entry-field])
+                                 :option-type :ok-cancel
+                                 :success-fn (fn [e]
+                                               (let [new-name (text entry-field)]
+                                                 (swap! active-model #(conj % new-name))
+                                                 (config! active-listbox :model @active-model)
+                                                 ((:new-list! organizer) new-name)
+                                                 ;; add to display
+                                                 true)))
+          _ (listen add-new-list :action (fn [e]
+                                           (-> add-new-dialog
+                                               pack!
+                                               show!)))]
+      (-> (frame :title "manage todo lists"
+                 :content
+                 (top-bottom-split
+                  (border-panel :north "Active Todo Lists"
+                                :center active-listbox
+                                :south (left-right-split make-hidden add-new-list))
+                  (border-panel :north "Hidden Todo Lists"
+                                :center hidden-listbox
+                                :south (left-right-split make-active delete-list))
+                  :divider-location 1/2))
+          pack!
+          show!))))
                                 
 (defn active-content []
-  ;(println "in active-content, startup-lists:" (startup-lists))
   (border-panel
-   :center (display-lists (startup-lists))
-   :south modify-button))
+   :center (display-lists (startup-lists))))
+
+(defn make-menubar []
+  (let [modify (action :handler mod-listen :name "edit lists"
+                       :tip "Change which lists are displayed.")]
+    (menubar
+     :items [(menu :text "file" :items [modify])])))
 
 (def the-frame
   ;;(println "active-content: " (active-content)))
   (frame :title "my todo list(s)"
+         :menubar (make-menubar)
          :content (active-content)
          :width 650
          :height 650
