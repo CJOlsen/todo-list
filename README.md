@@ -1,5 +1,7 @@
 ## todo list
 
+THIS PROJECT BRANCH IS NO LONGER UNDER DEVELOPMENT.  ACTIVE DEVELOPMENT IS AT: github.com/CJOlsen/tiling-todo
+
 ## description
 
 this is just a little todo list app that I made to get used to the 
